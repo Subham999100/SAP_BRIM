@@ -17,10 +17,20 @@ class EmbeddingService:
             return self._model
         if self._model_failed:
             return None
+        # Try FastEmbed ONNX runtime first (robust, fast, no AppLocker/torch DLL block)
+        try:
+            from fastembed import TextEmbedding
+            logger.info("Loading FastEmbed model: sentence-transformers/all-MiniLM-L6-v2")
+            self._model = ("fastembed", TextEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2"))
+            logger.info("FastEmbed ONNX model loaded successfully.")
+            return self._model
+        except Exception as fe_err:
+            logger.info(f"FastEmbed not available ({fe_err}), trying SentenceTransformer...")
+
         try:
             from sentence_transformers import SentenceTransformer
             logger.info(f"Loading embedding model: {settings.EMBEDDING_MODEL}")
-            self._model = SentenceTransformer(settings.EMBEDDING_MODEL)
+            self._model = ("st", SentenceTransformer(settings.EMBEDDING_MODEL))
             logger.info("SentenceTransformer model loaded successfully.")
             return self._model
         except Exception as e:
@@ -58,37 +68,54 @@ class EmbeddingService:
         if not cleaned:
             return [0.0] * self.embedding_dim
 
-        model = self._get_model()
-        if model:
+        model_info = self._get_model()
+        if model_info:
+            tag, model = model_info
             try:
-                emb = model.encode(cleaned, convert_to_numpy=True)
-                # Normalize vector
+                if tag == "fastembed":
+                    emb = list(model.embed([cleaned]))[0]
+                else:
+                    emb = model.encode(cleaned, convert_to_numpy=True)
+                emb = np.array(emb, dtype=np.float32)
                 norm = np.linalg.norm(emb)
                 if norm > 0:
                     emb = emb / norm
                 return emb.tolist()
             except Exception as e:
-                logger.warning(f"SentenceTransformer encoding error: {e}. Falling back.")
+                logger.warning(f"Embedding encoding error ({tag}): {e}. Falling back.")
 
         return self._fallback_embed(cleaned)
 
     def embed_batch(self, texts: List[str]) -> List[List[float]]:
         if not texts:
             return []
-        model = self._get_model()
-        if model:
+        cleaned_texts = [t.strip() for t in texts]
+        model_info = self._get_model()
+        if model_info:
+            tag, model = model_info
             try:
-                embs = model.encode(texts, batch_size=32, convert_to_numpy=True)
-                result = []
-                for emb in embs:
-                    norm = np.linalg.norm(emb)
-                    if norm > 0:
-                        emb = emb / norm
-                    result.append(emb.tolist())
-                return result
+                if tag == "fastembed":
+                    embs_gen = model.embed(cleaned_texts, batch_size=64)
+                    result = []
+                    for emb in embs_gen:
+                        emb = np.array(emb, dtype=np.float32)
+                        norm = np.linalg.norm(emb)
+                        if norm > 0:
+                            emb = emb / norm
+                        result.append(emb.tolist())
+                    return result
+                else:
+                    embs = model.encode(cleaned_texts, batch_size=32, convert_to_numpy=True)
+                    result = []
+                    for emb in embs:
+                        norm = np.linalg.norm(emb)
+                        if norm > 0:
+                            emb = emb / norm
+                        result.append(emb.tolist())
+                    return result
             except Exception as e:
-                logger.warning(f"SentenceTransformer batch error: {e}. Falling back.")
+                logger.warning(f"Batch embedding error ({tag}): {e}. Falling back.")
 
-        return [self._fallback_embed(t) for t in texts]
+        return [self._fallback_embed(t) for t in cleaned_texts]
 
 embedding_service = EmbeddingService()

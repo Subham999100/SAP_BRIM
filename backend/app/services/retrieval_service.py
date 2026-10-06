@@ -2,7 +2,7 @@ import re
 import numpy as np
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
+from sqlalchemy import or_, func, desc
 
 from backend.app.config import settings
 from backend.app.models.chunk import DocumentChunk
@@ -45,59 +45,70 @@ class RetrievalService:
         db: Session,
         query: str,
         top_k: Optional[int] = None,
-        document_filter: Optional[str] = None
+        document_filter: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
+        """Hybrid retrieval using PostgreSQL vector and full‑text search with RRF fusion.
+
+        Returns a list of candidate chunk dictionaries compatible with the existing pipeline.
+        """
         k = top_k or settings.TOP_K
         processed_query = self.preprocess_query(query)
-        query_vector = np.array(embedding_service.embed_text(processed_query), dtype=np.float32)
-        q_norm = np.linalg.norm(query_vector)
 
-        # Base query for chunks
-        query_set = db.query(DocumentChunk)
+        # 1️⃣ Compute query embedding via embedding service
+        query_vector = embedding_service.embed_text(processed_query)
+
+        # 2️⃣ Vector search (high‑recall) – fetch extra candidates for fusion
+        vec_q = db.query(DocumentChunk)
         if document_filter:
-            query_set = query_set.filter(DocumentChunk.document_name == document_filter)
+            vec_q = vec_q.filter(DocumentChunk.document_name == document_filter)
+        vec_q = (
+            vec_q.order_by(DocumentChunk.embedding.op("<=>")(query_vector))
+            .limit(k * 2)
+        )
+        vec_hits = vec_q.all()
 
-        all_chunks = query_set.all()
-        if not all_chunks:
-            return []
+        # 3️⃣ Lexical search using GIN full‑text index
+        lex_q = db.query(DocumentChunk, func.ts_rank_cd(
+            func.to_tsvector('english', DocumentChunk.chunk_text),
+            func.plainto_tsquery('english', processed_query)
+        ).label('lex_score'))
+        if document_filter:
+            lex_q = lex_q.filter(DocumentChunk.document_name == document_filter)
+        lex_q = (
+            lex_q.filter(func.to_tsvector('english', DocumentChunk.chunk_text).op('@@')(func.plainto_tsquery('english', processed_query)))
+            .order_by(desc('lex_score'))
+            .limit(k * 2)
+        )
+        lex_hits = [(c, s) for c, s in lex_q.all()]
 
-        scored_candidates = []
-        for chunk in all_chunks:
-            # 1. Vector similarity
-            raw_emb = chunk.embedding
-            if raw_emb is None:
-                vec_sim = 0.0
-            else:
-                chunk_vector = np.array(raw_emb, dtype=np.float32)
-                c_norm = np.linalg.norm(chunk_vector)
-                if q_norm > 0 and c_norm > 0:
-                    vec_sim = float(np.dot(query_vector, chunk_vector) / (q_norm * c_norm))
-                else:
-                    vec_sim = 0.0
+        # 4️⃣ Reciprocal Rank Fusion (RRF)
+        def rrf_fusion(vec_hits: List[DocumentChunk], lex_hits: List[tuple], denom: int = 60) -> List[DocumentChunk]:
+            scores: Dict[str, float] = {}
+            for rank, chunk in enumerate(vec_hits, start=1):
+                scores[chunk.id] = scores.get(chunk.id, 0.0) + 1.0 / (denom + rank)
+            for rank, (chunk, _) in enumerate(lex_hits, start=1):
+                scores[chunk.id] = scores.get(chunk.id, 0.0) + 1.0 / (denom + rank)
+            top_ids = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:k]
+            id_to_chunk: Dict[str, DocumentChunk] = {c.id: c for c in vec_hits}
+            id_to_chunk.update({c.id: c for c, _ in lex_hits})
+            return [id_to_chunk[_id] for _id, _ in top_ids]
 
-            # Scale cosine sim (-1..1) to (0..1)
-            normalized_vec_score = max(0.0, min(1.0, (vec_sim + 1.0) / 2.0))
+        fused_chunks = rrf_fusion(vec_hits, lex_hits, denom=60)
 
-            # 2. Keyword score
-            keyword_score = self._compute_keyword_score(processed_query, chunk.chunk_text)
-
-            # 3. Hybrid fusion score
-            hybrid_score = 0.60 * normalized_vec_score + 0.40 * keyword_score
-
-            scored_candidates.append({
+        # 5️⃣ Build result dictionaries compatible with downstream code
+        results: List[Dict[str, Any]] = []
+        for chunk in fused_chunks:
+            results.append({
                 "chunk_id": chunk.id,
                 "document_id": chunk.document_id,
                 "document_name": chunk.document_name,
                 "page_number": chunk.page_number,
                 "section": chunk.section or f"Page {chunk.page_number}",
                 "chunk_text": chunk.chunk_text,
-                "vector_score": normalized_vec_score,
-                "keyword_score": keyword_score,
-                "score": hybrid_score
+                "vector_score": None,
+                "keyword_score": None,
+                "score": None,
             })
-
-        # Sort descending by hybrid score
-        scored_candidates.sort(key=lambda x: x["score"], reverse=True)
-        return scored_candidates[:k]
+        return results
 
 retrieval_service = RetrievalService()

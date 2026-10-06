@@ -5,10 +5,11 @@ from pathlib import Path
 from typing import Dict, Any, List
 from sqlalchemy.orm import Session
 
-# Ensure backend root is on sys.path if invoked directly
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
-if str(BASE_DIR) not in sys.path:
-    sys.path.insert(0, str(BASE_DIR))
+# Ensure project root is on sys.path if invoked directly
+ROOT_DIR = Path(__file__).resolve().parent.parent.parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
 
 from backend.app.config import settings
 from backend.app.database import SessionLocal, init_db
@@ -65,10 +66,10 @@ def run_ingestion(db: Session = None) -> List[Dict[str, Any]]:
             existing_doc.page_count = page_count
             doc_record = existing_doc
         else:
-            title = filename.replace(".pdf", "").replace("_", " ")
+            doc_info = document_service.get_document_info(filename)
             doc_record = Document(
                 filename=filename,
-                title=title,
+                title=doc_info["title"],
                 file_hash=file_hash,
                 version="1.0",
                 page_count=page_count
@@ -83,18 +84,19 @@ def run_ingestion(db: Session = None) -> List[Dict[str, Any]]:
         for page_data in pages:
             page_num = page_data["page_number"]
             page_text = page_data["text"]
-            headings = page_data["headings"]
+            active_section = page_data.get("active_section", "Overview")
 
             chunks = document_service.chunk_page_text(
                 text=page_text,
                 page_number=page_num,
                 document_name=filename,
-                headings=headings
+                active_section=active_section
             )
             all_chunk_dicts.extend(chunks)
 
         # Batch embed chunk texts for high performance
         if all_chunk_dicts:
+            import json
             texts_to_embed = [c["chunk_text"] for c in all_chunk_dicts]
             embeddings = embedding_service.embed_batch(texts_to_embed)
 
@@ -106,7 +108,7 @@ def run_ingestion(db: Session = None) -> List[Dict[str, Any]]:
                     page_number=chunk_data["page_number"],
                     section=chunk_data["section"],
                     chunk_text=chunk_data["chunk_text"],
-                    metadata_json=str(chunk_data["metadata"]),
+                    metadata_json=json.dumps(chunk_data["metadata"]),
                     embedding=embeddings[i]
                 )
                 db.add(chunk_record)
