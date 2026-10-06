@@ -1,0 +1,98 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    @apply bg-[#0f172a] text-slate-100 font-sans antialiased overflow-hidden;
+  }
+}
+
+/* Custom Sleek Scrollbar */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.2);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.4);
+}
+
+/* Markdown typography in chat */
+
+.prose-sap h1,
+.prose-sap h2,
+.prose-sap h3 {
+  color: #f8fafc;
+  font-weight: 600;
+  margin-top: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.prose-sap p {
+  margin-bottom: 0.75rem;
+  line-height: 1.65;
+}
+
+.prose-sap ul {
+  list-style-type: disc;
+  padding-left: 1.25rem;
+  margin-bottom: 0.75rem;
+}
+
+.prose-sap ol {
+  list-style-type: decimal;
+  padding-left: 1.25rem;
+  margin-bottom: 0.75rem;
+}
+
+.prose-sap li {
+  margin-bottom: 0.25rem;
+}
+
+.prose-sap code {
+  background-color: rgba(30, 41, 59, 0.8);
+  color: #38bdf8;
+  padding: 0.15rem 0.4rem;
+  border-radius: 0.25rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.875em;
+  border: 1px solid rgba(56, 189, 248, 0.2);
+}
+
+.prose-sap pre {
+  background-color: #0b1120;
+  border: 1px solid rgba(51, 65, 85, 0.6);
+  border-radius: 0.5rem;
+  padding: 0.85rem 1rem;
+  overflow-x: auto;
+  margin-bottom: 0.85rem;
+}
+
+.prose-sap pre code {
+  background-color: transparent;
+  padding: 0;
+  border: none;
+  color: #e2e8f0;
+}
+
+.prose-sap strong {
+  color: #f1f5f9;
+  font-weight: 600;
+}
+
+.prose-sap blockquote {
+  border-left: 3px solid #0a6ed1;
+  padding-left: 0.85rem;
+  color: #94a3b8;
+  font-style: italic;
+  margin: 0.75rem 0;
+}
