@@ -6,7 +6,8 @@ SAP_CORE_MODULES = {
     "fi", "co", "fico", "mm", "sd", "pp", "qm", "pm", "ps", "hcm", "hr",
     "basis", "abap", "fiori", "s/4hana", "s4hana", "s4", "ecc", "btp",
     "netweaver", "successfactors", "ariba", "concur", "hybris", "c4c",
-    "bw", "bi", "crm", "srm", "ewm", "tm", "grc", "mdg", "solman"
+    "bw", "bi", "crm", "srm", "ewm", "tm", "grc", "mdg", "solman",
+    "brim", "cc", "ci", "som", "fica", "fi-ca", "bit", "cit"
 }
 
 
@@ -28,7 +29,19 @@ SAP_KEYWORDS = {
     "service marketplace", "sap notes", "oss note", "su01", "pfcg",
     "sm50", "sm21", "st22", "st03n", "se11", "se16n", "se38", "se80",
     "me21n", "va01", "fb01", "fb50", "fb60", "migo", "miro", "vl01n",
-    "vf01", "co01"
+    "vf01", "co01",
+    # SAP BRIM Revenue & Billing Domain Keywords
+    "provider contract", "billing plan", "chargeable item", "billable item",
+    "consumption item", "chargeable event", "chargeable service", "price plan",
+    "pricing plan", "price table", "charge plan", "charging plan",
+    "allowance plan", "allowance logic", "allowance",
+    "tier table", "mapping table", "range table", "core tool",
+    "convergent charging", "convergent invoicing", "subscription order management",
+    "contract accounts receivable and payable", "bit class", "cit class",
+    "billable item class", "consumption item class", "partner settlement",
+    "revenue sharing", "rating logic", "rating process", "invoicing document",
+    "billable item management", "usage-based rating", "usage-based billing",
+    "usage metering", "consumption metering", "charge calculation"
 }
 
 
@@ -43,7 +56,7 @@ GENERAL_UNRELATED_PATTERNS = [
 
 
 class SAPClassifier:
-    """Strict SAP-domain classifier."""
+    """Strict SAP-domain classifier with comprehensive SAP BRIM coverage."""
 
     @staticmethod
     def _contains_term(text: str, term: str) -> bool:
@@ -84,6 +97,20 @@ class SAPClassifier:
         if cls._contains_term(text, "sap"):
             return True, "sap_domain_verified"
 
+        # Explicitly check for known unrelated non-SAP questions first if no explicit 'sap'
+        for pattern in GENERAL_UNRELATED_PATTERNS:
+            if re.search(pattern, text, re.IGNORECASE):
+                # Only accept if it ALSO explicitly contains a strong SAP/BRIM keyword
+                has_strong_sap = any(
+                    cls._contains_term(text, kw)
+                    for kw in (
+                        "convergent charging", "convergent invoicing", "subscription order management",
+                        "provider contract", "price plan", "charge plan", "billable item", "s/4hana", "abap", "bapi"
+                    )
+                )
+                if not has_strong_sap:
+                    return False, "I can only help with SAP and SAP-related topics."
+
         # Match SAP keywords using whole-term matching.
         has_sap_keyword = any(
             cls._contains_term(text, keyword)
@@ -111,7 +138,7 @@ class SAPClassifier:
         common_tables = {
             "mara", "marc", "mard", "bseg", "bkpf",
             "ekko", "ekpo", "vbak", "vbap",
-            "kna1", "lfa1", "t001"
+            "kna1", "lfa1", "t001", "dfkkbip", "dfkkop"
         }
 
         has_sap_table = any(
@@ -126,11 +153,6 @@ class SAPClassifier:
             or has_sap_table
         ):
             return True, "sap_domain_verified"
-
-        # Explicitly known unrelated questions.
-        for pattern in GENERAL_UNRELATED_PATTERNS:
-            if re.search(pattern, text, re.IGNORECASE):
-                return False, "I can only help with SAP and SAP-related topics."
 
         # Everything without SAP context is rejected.
         return False, "I can only help with SAP and SAP-related topics."

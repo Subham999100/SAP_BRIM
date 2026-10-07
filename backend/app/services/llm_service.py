@@ -1,45 +1,33 @@
-import os
-import re
 import logging
-from typing import List, Dict, Any, Generator
+import os
+from typing import Any, Dict, Generator, List, Optional, Tuple
 
 from backend.app.config import settings
+from backend.app.services.context_builder import context_builder
+from backend.app.services.prompts import (
+    SAP_BRIM_SYSTEM_PROMPT,
+    build_brim_user_prompt,
+)
 
 logger = logging.getLogger(__name__)
 
-
-SYSTEM_PROMPT = """You are an SAP Knowledge Assistant.
-
-Your scope is strictly SAP and SAP-related topics.
-
-Answer ONLY from the evidence supplied by the retrieval system.
-
-Never invent facts.
-Never use general pretrained knowledge as evidence.
-Never claim that information exists in the private knowledge base unless the supplied evidence supports it.
-
-For private knowledge-base answers:
-- Give a concise, direct answer.
-- Summarize the evidence instead of dumping document text.
-- Preserve important SAP technical terms and definitions.
-- Do not reproduce document headers, confidentiality notices, or unnecessary metadata.
-- Do not mention information that is not supported by the retrieved evidence.
-
-For web answers:
-- Use only the supplied web evidence.
-- Clearly indicate that the information came from web sources.
-
-If the evidence is insufficient, explicitly say that the information could not be verified.
-
-For non-SAP questions, refuse briefly.
-
-Be precise, concise, factual, and evidence-grounded."""
+SYSTEM_PROMPT = SAP_BRIM_SYSTEM_PROMPT
 
 
 class LLMService:
+    """
+    LLM generation service.
 
-    def __init__(self):
-        self.provider = settings.LLM_PROVIDER.lower()
+    Architecture boundary:
+        Retrieved RAG evidence -> internal LLM context only
+        LLM -> user-facing answer
+
+    This service never returns raw retrieved chunks or locally generated
+    chunk-derived answers when the LLM is unavailable.
+    """
+
+    def __init__(self) -> None:
+        self.provider = (settings.LLM_PROVIDER or "groq").lower().strip()
 
         self.api_key = (
             settings.LLM_API_KEY
@@ -47,572 +35,347 @@ class LLMService:
             or os.getenv("OPENAI_API_KEY", "")
         )
 
-    # =========================================================
-    # TEXT CLEANING
-    # =========================================================
-
-    @staticmethod
-    def _clean_document_text(text: str) -> str:
-
-        if not text:
-            return ""
-
-        cleaned = text
-
-        cleaned = re.sub(
-            r"CONFIDENTIAL\s*&\s*PROPRIETARY[^\n]*",
-            "",
-            cleaned,
-            flags=re.IGNORECASE
-        )
-
-        cleaned = re.sub(
-            r"SAP\s+S/4HANA\s+OFFICIAL\s+REFERENCE\s+MANUAL",
-            "",
-            cleaned,
-            flags=re.IGNORECASE
-        )
-
-        cleaned = re.sub(
-            r"Module:\s*[^\n]*",
-            "",
-            cleaned,
-            flags=re.IGNORECASE
-        )
-
-        cleaned = re.sub(
-            r"Document:\s*[^\n]*",
-            "",
-            cleaned,
-            flags=re.IGNORECASE
-        )
-
-        cleaned = re.sub(
-            r"[ \t]+",
-            " ",
-            cleaned
-        )
-
-        cleaned = re.sub(
-            r"\n{3,}",
-            "\n\n",
-            cleaned
-        )
-
-        return cleaned.strip()
-
-    # =========================================================
-    # SENTENCE EXTRACTION
-    # =========================================================
-
-    @staticmethod
-    def _extract_sentences(text: str) -> List[str]:
-
-        if not text:
-            return []
-
-        text = re.sub(
-            r"\s+",
-            " ",
-            text
-        ).strip()
-
-        sentences = re.split(
-            r"(?<=[.!?])\s+",
-            text
-        )
-
-        cleaned = []
-
-        for sentence in sentences:
-
-            sentence = sentence.strip()
-
-            if len(sentence) < 20:
-                continue
-
-            lower = sentence.lower()
-
-            if any(
-                phrase in lower
-                for phrase in [
-                    "confidential & proprietary",
-                    "official reference manual",
-                    "module:",
-                    "document:"
-                ]
-            ):
-                continue
-
-            cleaned.append(sentence)
-
-        return cleaned
-
-    # =========================================================
-    # TERM MATCHING
-    # =========================================================
-
-    @staticmethod
-    def _contains_term(text: str, term: str) -> bool:
-
-        if not text or not term:
-            return False
-
-        pattern = (
-            rf"(?<![a-z0-9])"
-            rf"{re.escape(term.lower())}"
-            rf"(?![a-z0-9])"
-        )
-
-        return bool(
-            re.search(
-                pattern,
-                text.lower()
-            )
-        )
-
-    # =========================================================
-    # LOCAL GROUNDED RESPONSE
-    # =========================================================
-
-    def _generate_grounded_local_response(
-        self,
-        query: str,
-        evidence_text: str,
-        source_type: str,
-        metadata: List[Dict[str, Any]]
-    ) -> str:
-
-        if not metadata:
-            return (
-                "I couldn't find sufficient information about this "
-                "in the available SAP knowledge base."
-            )
-
-        # -----------------------------------------------------
-        # WEB RESPONSE
-        # -----------------------------------------------------
-
-        if source_type == "web":
-
-            useful_snippets = []
-
-            for item in metadata[:3]:
-
-                title = item.get(
-                    "title",
-                    "SAP web source"
-                )
-
-                snippet = item.get(
-                    "snippet",
-                    ""
-                ).strip()
-
-                if not snippet:
-                    continue
-
-                snippet = self._clean_document_text(
-                    snippet
-                )
-
-                if snippet:
-                    useful_snippets.append(
-                        f"- **{title}**: {snippet}"
-                    )
-
-            if not useful_snippets:
-                return (
-                    "I couldn't find sufficient verified web "
-                    "information to answer this SAP question."
-                )
-
-            return (
-                "Based on verified SAP web sources:\n\n"
-                + "\n".join(useful_snippets)
-            )
-
-        # -----------------------------------------------------
-        # QUERY TERMS
-        # -----------------------------------------------------
-
-        stop_words = {
-            "what",
-            "is",
-            "the",
-            "a",
-            "an",
-            "how",
-            "to",
-            "in",
-            "of",
-            "and",
-            "for",
-            "with",
-            "does",
-            "explain",
-            "can",
-            "you",
-            "tell",
-            "me",
-            "about",
-            "are",
-            "why",
-            "which",
-            "where",
-            "when"
-        }
-
-        query_terms = [
-            word.lower()
-            for word in re.findall(
-                r"\b[a-z0-9\/\-_]+\b",
-                query.lower()
-            )
-            if word.lower() not in stop_words
-            and len(word) > 1
-        ]
-
-        # -----------------------------------------------------
-        # COLLECT CANDIDATE SENTENCES
-        # -----------------------------------------------------
-
-        candidate_sentences = []
-
-        for item in metadata[:6]:
-
-            raw_text = item.get(
-                "chunk_text",
-                ""
-            )
-
-            cleaned_text = self._clean_document_text(
-                raw_text
-            )
-
-            sentences = self._extract_sentences(
-                cleaned_text
-            )
-
-            if not sentences:
-                continue
-
-            rerank_score = float(
-                item.get(
-                    "rerank_score",
-                    item.get(
-                        "score",
-                        0.0
-                    )
-                )
-            )
-
-            for sentence in sentences:
-
-                sentence_lower = sentence.lower()
-
-                # Query-term matching
-                matched_terms = sum(
-                    1
-                    for term in query_terms
-                    if self._contains_term(
-                        sentence_lower,
-                        term
-                    )
-                )
-
-                query_match_score = (
-                    matched_terms /
-                    max(1, len(query_terms))
-                )
-
-                # Definition bonus
-                definition_bonus = 0.0
-
-                if (
-                    " is " in sentence_lower
-                    or " are " in sentence_lower
-                    or " refers to " in sentence_lower
-                    or " means " in sentence_lower
-                    or " designed for " in sentence_lower
-                ):
-                    definition_bonus = 1.0
-
-                # Direct subject bonus
-                subject_bonus = 0.0
-
-                if (
-                    "sap s/4hana" in sentence_lower
-                    and (
-                        " is " in sentence_lower
-                        or " refers to " in sentence_lower
-                        or " designed " in sentence_lower
-                    )
-                ):
-                    subject_bonus = 1.0
-
-                # Final relevance
-                relevance_score = (
-                    query_match_score * 0.50
-                    + rerank_score * 0.20
-                    + definition_bonus * 0.15
-                    + subject_bonus * 0.15
-                )
-
-                candidate_sentences.append(
-                    {
-                        "sentence": sentence,
-                        "score": relevance_score
-                    }
-                )
-
-        # -----------------------------------------------------
-        # SORT BY RELEVANCE
-        # -----------------------------------------------------
-
-        candidate_sentences.sort(
-            key=lambda x: x["score"],
-            reverse=True
-        )
-
-        # -----------------------------------------------------
-        # REMOVE DUPLICATES
-        # -----------------------------------------------------
-
-        selected = []
-
-        seen = set()
-
-        for item in candidate_sentences:
-
-            sentence = item["sentence"].strip()
-
-            normalized = sentence.lower()
-
-            if normalized in seen:
-                continue
-
-            seen.add(normalized)
-
-            selected.append(item)
-
-            if len(selected) >= 4:
-                break
-
-        if not selected:
-            return (
-                "I couldn't find sufficient information about this "
-                "in the available SAP knowledge base."
-            )
-
-        # -----------------------------------------------------
-        # BUILD ANSWER
-        # -----------------------------------------------------
-
-        query_lower = query.lower()
-
-        if (
-            query_lower.startswith("what is")
-            or query_lower.startswith("what are")
-            or "define" in query_lower
-        ):
-
-            answer = " ".join(
-                item["sentence"]
-                for item in selected[:3]
-            )
-
-        elif (
-            "explain" in query_lower
-            or "how does" in query_lower
-            or "how do" in query_lower
-        ):
-
-            answer = "\n\n".join(
-                f"- {item['sentence']}"
-                for item in selected[:4]
-            )
-
-        else:
-
-            answer = "\n\n".join(
-                f"- {item['sentence']}"
-                for item in selected[:4]
-            )
+        self._client: Optional[Any] = None
+        self._model: Optional[str] = None
+
+    # ------------------------------------------------------------------
+    # CLIENT MANAGEMENT
+    # ------------------------------------------------------------------
+
+    def _get_api_key(self) -> str:
+        """Return the currently configured provider API key."""
 
         return (
-            "According to the private SAP knowledge base:\n\n"
-            + answer
+            self.api_key
+            or settings.LLM_API_KEY
+            or settings.GROQ_API_KEY
+            or os.getenv("OPENAI_API_KEY", "")
         )
 
-    # =========================================================
-    # MAIN ANSWER GENERATION
-    # =========================================================
+    def _get_client_and_model(
+        self,
+    ) -> Tuple[Optional[Any], Optional[str]]:
+        """
+        Create the provider client once and reuse it across requests.
+
+        Important:
+        Do not manipulate provider class properties such as Groq.chat.
+        The SDK-created client owns those objects.
+        """
+
+        api_key = self._get_api_key()
+
+        if not api_key:
+            logger.error("No LLM API key configured.")
+            return None, None
+
+        self.api_key = api_key
+
+        try:
+            # ----------------------------------------------------------
+            # GROQ
+            # ----------------------------------------------------------
+            if self.provider == "groq" or api_key.startswith("gsk_"):
+                from groq import Groq
+
+                if (
+                    self._client is None
+                    or not isinstance(self._client, Groq)
+                ):
+                    self._client = Groq(api_key=api_key)
+                    self._model = (
+                        settings.LLM_MODEL
+                        or "openai/gpt-oss-120b"
+                    )
+
+                    logger.info(
+                        "Initialized Groq LLM client with model: %s",
+                        self._model,
+                    )
+
+                return self._client, self._model
+
+            # ----------------------------------------------------------
+            # OPENAI
+            # ----------------------------------------------------------
+            if self.provider == "openai":
+                from openai import OpenAI
+
+                if (
+                    self._client is None
+                    or not isinstance(self._client, OpenAI)
+                ):
+                    self._client = OpenAI(api_key=api_key)
+                    self._model = (
+                        settings.LLM_MODEL
+                        or "gpt-4o-mini"
+                    )
+
+                    logger.info(
+                        "Initialized OpenAI LLM client with model: %s",
+                        self._model,
+                    )
+
+                return self._client, self._model
+
+            # ----------------------------------------------------------
+            # LOCAL / UNSUPPORTED
+            # ----------------------------------------------------------
+            logger.error(
+                "Unsupported LLM provider: %s",
+                self.provider,
+            )
+            return None, None
+
+        except ImportError as exc:
+            logger.error(
+                "LLM provider package is not installed: %s",
+                exc,
+            )
+            return None, None
+
+        except Exception as exc:
+            logger.exception(
+                "Failed to initialize LLM client: %s",
+                exc,
+            )
+            return None, None
+
+    # ------------------------------------------------------------------
+    # PROMPT BUILDING
+    # ------------------------------------------------------------------
+
+    def _build_user_prompt(
+        self,
+        query: str,
+        evidence: List[Dict[str, Any]],
+        source_type: str,
+        business_data: Optional[Dict[str, Any]],
+        chat_history: Optional[List[Dict[str, str]]],
+    ) -> str:
+        """
+        Build the bounded internal context passed to the LLM.
+        """
+
+        structured_context = context_builder.build_context(
+            evidence=evidence,
+            source_type=source_type,
+            business_data=business_data,
+            chat_history=chat_history,
+        )
+
+        return build_brim_user_prompt(
+            query=query,
+            structured_context=structured_context,
+            source_type=source_type,
+        )
+
+    # ------------------------------------------------------------------
+    # NORMAL GENERATION
+    # ------------------------------------------------------------------
 
     def generate_answer(
         self,
         query: str,
         evidence: List[Dict[str, Any]],
-        source_type: str = "knowledge_base"
+        source_type: str = "knowledge_base",
+        business_data: Optional[Dict[str, Any]] = None,
+        chat_history: Optional[List[Dict[str, str]]] = None,
     ) -> str:
+        """
+        Generate a user-facing answer using the configured LLM.
 
-        evidence_context = ""
+        Retrieved evidence is supplied only as internal context.
+        """
 
-        if source_type == "knowledge_base":
-
-            evidence_context = "\n\n".join(
-                [
-                    (
-                        f"[Document: {c.get('document_name')}, "
-                        f"Page: {c.get('page_number')}, "
-                        f"Section: {c.get('section')}]\n"
-                        f"{c.get('chunk_text')}"
-                    )
-                    for c in evidence
-                ]
-            )
-
-        elif source_type == "web":
-
-            evidence_context = "\n\n".join(
-                [
-                    (
-                        f"[Source: {w.get('title')} "
-                        f"- {w.get('domain')}]\n"
-                        f"{w.get('snippet')}"
-                    )
-                    for w in evidence
-                ]
-            )
-
-        # =====================================================
-        # CLOUD LLM
-        # =====================================================
-
-        if self.api_key:
-
-            try:
-
-                if (
-                    "groq" in self.provider
-                    or self.api_key.startswith("gsk_")
-                ):
-
-                    from groq import Groq
-
-                    client = Groq(
-                        api_key=self.api_key
-                    )
-
-                    model = "llama-3.3-70b-versatile"
-
-                else:
-
-                    from openai import OpenAI
-
-                    client = OpenAI(
-                        api_key=self.api_key
-                    )
-
-                    model = (
-                        settings.LLM_MODEL
-                        or "gpt-4o-mini"
-                    )
-
-                user_prompt = f"""
-USER QUERY:
-{query}
-
-SOURCE TYPE:
-{source_type.upper()}
-
-RETRIEVED EVIDENCE:
-{evidence_context}
-
-TASK:
-
-Answer the user's question using ONLY the retrieved evidence.
-
-Rules:
-
-1. Do not invent facts.
-2. Do not use outside knowledge.
-3. Do not reproduce large sections of the documents.
-4. Give a concise answer.
-5. Preserve important SAP technical terminology.
-6. Remove document headers and confidentiality notices.
-7. Prefer the evidence that directly answers the user's question.
-8. If the evidence is insufficient, say so.
-"""
-
-                response = client.chat.completions.create(
-                    model=model,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": SYSTEM_PROMPT
-                        },
-                        {
-                            "role": "user",
-                            "content": user_prompt
-                        }
-                    ],
-                    temperature=0.1,
-                    max_tokens=500
-                )
-
-                return (
-                    response
-                    .choices[0]
-                    .message
-                    .content
-                    .strip()
-                )
-
-            except Exception as e:
-
-                logger.warning(
-                    f"Cloud LLM error ({e}). "
-                    "Using local grounded synthesis."
-                )
-
-        # =====================================================
-        # LOCAL FALLBACK
-        # =====================================================
-
-        return self._generate_grounded_local_response(
+        user_prompt = self._build_user_prompt(
             query=query,
-            evidence_text=evidence_context,
+            evidence=evidence,
             source_type=source_type,
-            metadata=evidence
+            business_data=business_data,
+            chat_history=chat_history,
         )
 
-    # =========================================================
-    # STREAMING
-    # =========================================================
+        client, model = self._get_client_and_model()
+
+        if client is None or model is None:
+            return self._unavailable_response()
+
+        try:
+            logger.debug(
+                "Calling LLM provider=%s model=%s max_tokens=%s",
+                self.provider,
+                model,
+                settings.LLM_MAX_OUTPUT_TOKENS,
+            )
+
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": SYSTEM_PROMPT,
+                    },
+                    {
+                        "role": "user",
+                        "content": user_prompt,
+                    },
+                ],
+                temperature=0.1,
+                max_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
+            )
+
+            content = self._extract_completion_content(response)
+
+            if content:
+                return content
+
+            logger.warning(
+                "LLM returned an empty completion."
+            )
+
+            return (
+                "The AI reasoning service returned an empty response. "
+                "Please retry your query."
+            )
+
+        except Exception as exc:
+            logger.exception(
+                "LLM generation failed: %s",
+                exc,
+            )
+
+            return self._unavailable_response()
+
+    # ------------------------------------------------------------------
+    # STREAMING GENERATION
+    # ------------------------------------------------------------------
 
     def stream_answer(
         self,
         query: str,
         evidence: List[Dict[str, Any]],
-        source_type: str = "knowledge_base"
+        source_type: str = "knowledge_base",
+        business_data: Optional[Dict[str, Any]] = None,
+        chat_history: Optional[List[Dict[str, str]]] = None,
     ) -> Generator[str, None, None]:
+        """
+        Stream only LLM-generated tokens.
 
-        full_answer = self.generate_answer(
-            query,
-            evidence,
-            source_type
+        Retrieved evidence is never streamed directly to the client.
+        """
+
+        user_prompt = self._build_user_prompt(
+            query=query,
+            evidence=evidence,
+            source_type=source_type,
+            business_data=business_data,
+            chat_history=chat_history,
         )
 
-        words = full_answer.split(" ")
+        client, model = self._get_client_and_model()
 
-        for i, word in enumerate(words):
+        if client is None or model is None:
+            yield self._unavailable_response()
+            return
 
-            yield word + (
-                " "
-                if i < len(words) - 1
-                else ""
+        try:
+            logger.debug(
+                "Starting LLM stream provider=%s model=%s",
+                self.provider,
+                model,
             )
 
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": SYSTEM_PROMPT,
+                    },
+                    {
+                        "role": "user",
+                        "content": user_prompt,
+                    },
+                ],
+                temperature=0.1,
+                max_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
+                stream=True,
+            )
+
+            yielded_content = False
+
+            for chunk in response:
+                if not getattr(chunk, "choices", None):
+                    continue
+
+                choice = chunk.choices[0]
+
+                # Standard OpenAI/Groq streaming response.
+                delta = getattr(choice, "delta", None)
+
+                if delta is not None:
+                    content = getattr(delta, "content", None)
+
+                    if content:
+                        yielded_content = True
+                        yield content
+
+            if not yielded_content:
+                logger.warning(
+                    "LLM stream completed without content."
+                )
+
+        except Exception as exc:
+            logger.exception(
+                "LLM streaming generation failed: %s",
+                exc,
+            )
+
+            yield self._unavailable_response()
+
+    # ------------------------------------------------------------------
+    # RESPONSE HELPERS
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _extract_completion_content(response: Any) -> str:
+        """Safely extract text from a normal completion response."""
+
+        choices = getattr(response, "choices", None)
+
+        if not choices:
+            return ""
+
+        message = getattr(choices[0], "message", None)
+
+        if message is None:
+            return ""
+
+        content = getattr(message, "content", None)
+
+        if not content:
+            return ""
+
+        return content.strip()
+
+    @staticmethod
+    def _unavailable_response() -> str:
+        """
+        Explicit failure response.
+
+        Never substitute retrieved chunks or locally synthesized content.
+        """
+
+        return (
+            "The AI reasoning service is currently unavailable. "
+            "An answer cannot be generated without active model synthesis. "
+            "Please check the LLM provider configuration and try again."
+        )
+
+
+# ----------------------------------------------------------------------
+# SHARED SERVICE INSTANCE
+# ----------------------------------------------------------------------
 
 llm_service = LLMService()

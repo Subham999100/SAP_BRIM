@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Send, Loader2, Mic, MicOff } from 'lucide-react';
+import { Button } from '../ui/button';
 
 interface ChatInputProps {
   onSendMessage: (message: string) => void;
@@ -32,17 +33,22 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading }
     setVoiceSupported(!!SpeechRecognitionAPI);
   }, []);
 
-  // Auto-resize textarea
+  // Auto-resize textarea up to ~4 lines (~110px)
   useEffect(() => {
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
-      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 180)}px`;
+      const nextHeight = Math.min(Math.max(textareaRef.current.scrollHeight, 44), 110);
+      textareaRef.current.style.height = `${nextHeight}px`;
     }
   }, [input]);
 
   const stopListening = useCallback(() => {
     if (recognitionRef.current) {
-      recognitionRef.current.stop();
+      try {
+        recognitionRef.current.stop();
+      } catch {
+        // ignore
+      }
       recognitionRef.current = null;
     }
     interimRef.current = '';
@@ -54,56 +60,60 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading }
     const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognitionAPI) return;
 
-    const recognition = new SpeechRecognitionAPI();
-    recognition.lang = 'en-US';
-    recognition.interimResults = true;
-    recognition.continuous = true;
-    recognition.maxAlternatives = 1;
+    try {
+      const recognition = new SpeechRecognitionAPI();
+      recognition.lang = 'en-US';
+      recognition.interimResults = true;
+      recognition.continuous = true;
+      recognition.maxAlternatives = 1;
 
-    recognitionRef.current = recognition;
+      recognitionRef.current = recognition;
 
-    recognition.onstart = () => {
-      setIsListening(true);
-    };
+      recognition.onstart = () => {
+        setIsListening(true);
+      };
 
-    recognition.onresult = (event: SpeechRecognitionEvent) => {
-      let finalTranscript = '';
-      let interimTranscript = '';
+      recognition.onresult = (event: any) => {
+        let finalTranscript = '';
+        let interimTranscript = '';
 
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const transcript = event.results[i][0].transcript;
-        if (event.results[i].isFinal) {
-          finalTranscript += transcript;
-        } else {
-          interimTranscript += transcript;
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcript = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            finalTranscript += transcript;
+          } else {
+            interimTranscript += transcript;
+          }
         }
-      }
 
-      if (finalTranscript) {
-        setInput((prev) => {
-          const base = prev.endsWith(' ') || prev === '' ? prev : prev + ' ';
-          return (base + finalTranscript).trimStart();
-        });
-      }
-      interimRef.current = interimTranscript;
-    };
+        if (finalTranscript) {
+          setInput((prev) => {
+            const base = prev.endsWith(' ') || prev === '' ? prev : prev + ' ';
+            return (base + finalTranscript).trimStart();
+          });
+        }
+        interimRef.current = interimTranscript;
+      };
 
-    recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-      if (event.error === 'not-allowed') {
-        setVoiceError('Microphone access denied. Please allow microphone permissions.');
-      } else if (event.error !== 'aborted') {
-        setVoiceError('Voice recognition error. Please try again.');
-      }
-      stopListening();
-    };
+      recognition.onerror = (event: any) => {
+        if (event.error === 'not-allowed') {
+          setVoiceError('Microphone access denied. Please allow microphone permissions.');
+        } else if (event.error !== 'aborted') {
+          setVoiceError('Voice recognition error. Please try again.');
+        }
+        stopListening();
+      };
 
-    recognition.onend = () => {
-      setIsListening(false);
-      recognitionRef.current = null;
-      interimRef.current = '';
-    };
+      recognition.onend = () => {
+        setIsListening(false);
+        recognitionRef.current = null;
+        interimRef.current = '';
+      };
 
-    recognition.start();
+      recognition.start();
+    } catch {
+      setVoiceError('Could not initialize speech recognition.');
+    }
   }, [stopListening]);
 
   const toggleVoice = () => {
@@ -122,7 +132,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading }
     onSendMessage(input.trim());
     setInput('');
     if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = '44px';
     }
   };
 
@@ -134,87 +144,95 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading }
   };
 
   return (
-    <div className="w-full max-w-4xl mx-auto px-4 pb-4 pt-2">
-      {/* Voice error toast */}
+    <div className="w-full max-w-3xl mx-auto px-4 pb-3 pt-2">
+      {/* Voice error banner */}
       {voiceError && (
-        <div className="mb-2 px-3 py-2 rounded-xl bg-rose-950/60 border border-rose-700/50 text-xs text-rose-300 flex items-center justify-between gap-2">
+        <div className="mb-2 px-3 py-1.5 rounded-lg bg-rose-950/60 border border-rose-800/60 text-xs text-rose-300 flex items-center justify-between gap-2">
           <span>{voiceError}</span>
-          <button onClick={() => setVoiceError(null)} className="text-rose-400 hover:text-rose-200 transition font-bold shrink-0">✕</button>
+          <button
+            type="button"
+            onClick={() => setVoiceError(null)}
+            className="text-rose-400 hover:text-rose-200 text-xs font-bold shrink-0"
+            aria-label="Dismiss error"
+          >
+            ✕
+          </button>
         </div>
       )}
 
+      {/* Composer container */}
       <form
         onSubmit={handleSubmit}
-        className={`relative bg-slate-900/90 border rounded-2xl shadow-2xl transition-all duration-200 ${
+        className={`relative bg-slate-900 border rounded-xl transition-all duration-150 ${
           isListening
-            ? 'border-rose-500/70 ring-2 ring-rose-500/25'
-            : 'border-slate-700/80 focus-within:border-sap-500/80 focus-within:ring-2 focus-within:ring-sap-500/20'
+            ? 'border-rose-500/80 ring-1 ring-rose-500/30'
+            : 'border-slate-800 focus-within:border-slate-700 focus-within:ring-1 focus-within:ring-slate-700'
         }`}
       >
-        <textarea
-          ref={textareaRef}
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder={isListening ? 'Listening... speak now' : 'Ask anything about SAP...'}
-          rows={1}
-          disabled={isLoading}
-          className="w-full bg-transparent text-slate-100 placeholder-slate-500 text-sm px-4 pt-3.5 pb-12 focus:outline-none resize-none max-h-48 min-h-[52px]"
-        />
+        <div className="flex items-end gap-1.5 p-2">
+          <textarea
+            ref={textareaRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={isListening ? 'Listening... speak now' : 'Ask anything about SAP (S/4HANA, BRIM, MM, FI, ABAP)...'}
+            rows={1}
+            disabled={isLoading}
+            className="flex-1 bg-transparent text-slate-100 placeholder-slate-500 text-xs sm:text-sm px-2 py-1.5 focus:outline-none resize-none leading-relaxed disabled:opacity-50"
+            style={{ minHeight: '40px', maxHeight: '110px' }}
+          />
 
-        <div className="absolute bottom-2.5 left-3 right-3 flex items-center justify-between">
-          {/* Left side: mic status indicator */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 shrink-0 pb-0.5">
+            {/* Listening indicator */}
             {isListening && (
-              <span className="flex items-center gap-1.5 text-[11px] text-rose-400 font-medium animate-pulse">
-                <span className="w-2 h-2 rounded-full bg-rose-500 inline-block animate-pulse" />
-                Listening...
+              <span className="flex items-center gap-1 text-[11px] text-rose-400 font-medium px-2 animate-pulse">
+                <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+                Listening
               </span>
             )}
-          </div>
 
-          {/* Right side: voice + send buttons */}
-          <div className="flex items-center gap-1.5">
-            {/* Mic Button */}
+            {/* Mic button */}
             {voiceSupported && (
-              <button
+              <Button
                 type="button"
+                variant={isListening ? 'destructive' : 'ghost'}
+                size="icon"
                 onClick={toggleVoice}
                 disabled={isLoading}
                 title={isListening ? 'Stop recording' : 'Voice input'}
-                className={`flex items-center justify-center w-8 h-8 rounded-xl transition duration-150 disabled:opacity-40 disabled:cursor-not-allowed ${
-                  isListening
-                    ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-md shadow-rose-600/30 animate-pulse'
-                    : 'bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200'
-                }`}
+                aria-label={isListening ? 'Stop microphone' : 'Start microphone'}
+                className="h-8 w-8 rounded-lg"
               >
                 {isListening ? (
-                  <MicOff className="w-4 h-4" />
+                  <MicOff className="w-3.5 h-3.5" />
                 ) : (
-                  <Mic className="w-4 h-4" />
+                  <Mic className="w-3.5 h-3.5" />
                 )}
-              </button>
+              </Button>
             )}
 
-            {/* Send Button */}
-            <button
+            {/* Send button */}
+            <Button
               type="submit"
+              variant="sap"
+              size="icon"
               disabled={!input.trim() || isLoading}
-              className="flex items-center justify-center w-8 h-8 rounded-xl bg-sap-600 hover:bg-sap-500 disabled:opacity-40 disabled:hover:bg-sap-600 text-white shadow-md shadow-sap-600/30 transition duration-150 disabled:cursor-not-allowed"
+              aria-label="Send message"
+              className="h-8 w-8 rounded-lg shrink-0"
             >
               {isLoading ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
               ) : (
-                <Send className="w-4 h-4" />
+                <Send className="w-3.5 h-3.5" />
               )}
-            </button>
+            </Button>
           </div>
         </div>
       </form>
 
-      <div className="text-center mt-2">
-        <span className="text-[11px] text-slate-500">
-          SAP Knowledge Assistant grounded in verified enterprise documentation. Non-SAP queries are rejected.
+      <div className="text-center mt-1.5">
+        <span className="text-[10px] text-slate-500">
+          SAP Knowledge Assistant &middot; Enterprise RAG &middot; Enter sends, Shift + Enter adds newline
         </span>
       </div>
     </div>

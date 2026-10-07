@@ -9,7 +9,7 @@ import {
   Share2,
   Pin,
   PinOff,
-  Archive
+  Archive,
 } from 'lucide-react';
 import type { Chat } from '../../types';
 
@@ -75,19 +75,28 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({
 
   if (isEditing) {
     return (
-      <form onSubmit={handleSaveRename} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-800 border border-sap-500/50">
+      <form onSubmit={handleSaveRename} className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-slate-900 border border-slate-700">
         <input
           type="text"
           value={editTitle}
           onChange={(e) => setEditTitle(e.target.value)}
           autoFocus
-          className="flex-1 bg-transparent text-xs text-white focus:outline-none"
+          className="flex-1 bg-transparent text-xs text-slate-100 focus:outline-none"
         />
-        <button type="submit" className="p-1 hover:text-emerald-400 text-slate-300">
-          <Check className="w-3.5 h-3.5" />
+        <button
+          type="submit"
+          className="p-1 hover:text-emerald-400 text-slate-400"
+          aria-label="Confirm rename"
+        >
+          <Check className="w-3 h-3" />
         </button>
-        <button type="button" onClick={handleCancelRename} className="p-1 hover:text-rose-400 text-slate-400">
-          <X className="w-3.5 h-3.5" />
+        <button
+          type="button"
+          onClick={handleCancelRename}
+          className="p-1 hover:text-rose-400 text-slate-400"
+          aria-label="Cancel rename"
+        >
+          <X className="w-3 h-3" />
         </button>
       </form>
     );
@@ -96,14 +105,25 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({
   return (
     <div
       onClick={() => onSelect(chat.id)}
-      className={`group relative flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium cursor-pointer transition ${
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          onSelect(chat.id);
+        }
+      }}
+      className={`group relative flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs cursor-pointer transition select-none ${
         isActive
-          ? 'bg-slate-800 text-white border border-slate-700/80 shadow-sm'
-          : 'text-slate-400 hover:text-slate-200 hover:bg-slate-850'
+          ? 'bg-slate-800 text-slate-100 font-medium border border-slate-700/80 shadow-xs'
+          : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/80'
       }`}
     >
       <div className="flex items-center gap-2 min-w-0 flex-1">
-        <MessageSquare className={`w-3.5 h-3.5 shrink-0 ${isActive ? 'text-sap-400' : 'text-slate-500'}`} />
+        <MessageSquare
+          className={`w-3.5 h-3.5 shrink-0 ${
+            isActive ? 'text-sap-400' : 'text-slate-500 group-hover:text-slate-400'
+          }`}
+        />
         <span className="truncate flex-1">{chat.title}</span>
         {isPinned && (
           <span title="Pinned chat" className="shrink-0 flex items-center">
@@ -114,29 +134,34 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({
 
       <div className="relative shrink-0 flex items-center ml-1">
         <button
+          type="button"
           onClick={(e) => {
             e.stopPropagation();
             setShowMenu(!showMenu);
           }}
-          className={`p-1 rounded opacity-0 group-hover:opacity-100 transition hover:bg-slate-700 ${showMenu ? 'opacity-100 bg-slate-700' : ''}`}
+          className={`p-1 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-700 transition ${
+            showMenu ? 'opacity-100 bg-slate-700 text-slate-100' : 'opacity-0 group-hover:opacity-100'
+          }`}
           title="Chat options"
+          aria-label="Chat options"
         >
-          <MoreVertical className="w-3.5 h-3.5 text-slate-400" />
+          <MoreVertical className="w-3.5 h-3.5" />
         </button>
 
         {showMenu && (
           <div
             ref={menuRef}
             onClick={(e) => e.stopPropagation()}
-            className="absolute right-0 top-full mt-1 w-36 bg-slate-900 border border-slate-700/90 rounded-xl shadow-2xl z-30 py-1 overflow-hidden backdrop-blur-md"
+            className="absolute right-0 top-full mt-1 w-36 bg-slate-900 border border-slate-800 rounded-lg shadow-xl z-30 py-1"
           >
             {/* Share */}
             <button
+              type="button"
               onClick={() => {
                 setShowMenu(false);
                 onShare(chat);
               }}
-              className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 hover:text-white transition"
+              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800 hover:text-white transition"
             >
               <Share2 className="w-3.5 h-3.5 text-slate-400" />
               <span>Share</span>
@@ -144,23 +169,25 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({
 
             {/* Rename */}
             <button
+              type="button"
               onClick={() => {
                 setShowMenu(false);
                 setIsEditing(true);
               }}
-              className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 hover:text-white transition"
+              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800 hover:text-white transition"
             >
               <Edit2 className="w-3.5 h-3.5 text-slate-400" />
               <span>Rename</span>
             </button>
 
-            {/* Pin chat / Unpin chat */}
+            {/* Pin / Unpin */}
             <button
+              type="button"
               onClick={() => {
                 setShowMenu(false);
                 onTogglePin(chat.id);
               }}
-              className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 hover:text-white transition"
+              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800 hover:text-white transition"
             >
               {isPinned ? (
                 <>
@@ -177,11 +204,12 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({
 
             {/* Archive / Unarchive */}
             <button
+              type="button"
               onClick={() => {
                 setShowMenu(false);
                 onToggleArchive(chat.id);
               }}
-              className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 hover:text-white transition"
+              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800 hover:text-white transition"
             >
               <Archive className="w-3.5 h-3.5 text-slate-400" />
               <span>{isArchived ? 'Unarchive' : 'Archive'}</span>
@@ -191,13 +219,14 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({
 
             {/* Delete */}
             <button
+              type="button"
               onClick={() => {
                 setShowMenu(false);
                 if (window.confirm('Delete this SAP chat history?')) {
                   onDelete(chat.id);
                 }
               }}
-              className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-rose-400 hover:bg-rose-950/40 hover:text-rose-300 transition"
+              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-rose-400 hover:bg-rose-950/40 hover:text-rose-300 transition"
             >
               <Trash2 className="w-3.5 h-3.5 text-rose-400" />
               <span>Delete</span>

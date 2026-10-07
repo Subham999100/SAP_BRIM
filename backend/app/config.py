@@ -32,12 +32,17 @@ class Settings(BaseSettings):
     LLM_API_KEY: str = os.getenv("LLM_API_KEY", "")
     LLM_MODEL: str = os.getenv("LLM_MODEL", "openai/gpt-oss-120b")
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+    LLM_MAX_OUTPUT_TOKENS: int = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "4000"))
 
     # Embedding & RAG parameters
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
     EMBEDDING_DIM: int = 384
-    TOP_K: int = int(os.getenv("TOP_K", "50"))
-    RERANK_TOP_K: int = int(os.getenv("RERANK_TOP_K", "8"))
+    TOP_K: int = int(os.getenv("TOP_K", "30"))
+    RERANK_TOP_K: int = int(os.getenv("RERANK_TOP_K", "5"))
+    RRF_CANDIDATE_K: int = int(os.getenv("RRF_CANDIDATE_K", os.getenv("TOP_K", "30")))
+    FINAL_TOP_K: int = int(os.getenv("FINAL_TOP_K", os.getenv("RERANK_TOP_K", "5")))
+    RERANKER_MODEL: str = os.getenv("RERANKER_MODEL", "answerdotai/answerai-colbert-small-v1")
+    RERANKER_ENABLED: bool = os.getenv("RERANKER_ENABLED", "True").lower() in ("true", "1")
     SIMILARITY_THRESHOLD: float = float(os.getenv("SIMILARITY_THRESHOLD", "0.60"))
     GROUNDING_THRESHOLD: float = float(os.getenv("GROUNDING_THRESHOLD", "0.65"))
 

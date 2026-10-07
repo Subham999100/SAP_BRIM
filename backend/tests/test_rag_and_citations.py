@@ -11,10 +11,10 @@ def auth_headers():
     return {"Authorization": f"Bearer {login_resp['access_token']}"}
 
 def test_rag_knowledge_base_retrieval(auth_headers):
-    # Query clearly present in SAP MM manual
+    # Query clearly present in SAP Convergent Charging implementation guide
     resp = client.post(
         "/api/rag/query",
-        json={"query": "Explain the 3-Way Match verification process in SAP MM"},
+        json={"query": "What is a Price Plan in SAP Convergent Charging?"},
         headers=auth_headers
     )
     assert resp.status_code == 200
@@ -30,13 +30,13 @@ def test_rag_knowledge_base_retrieval(auth_headers):
     assert "page" in first_citation
     assert "section" in first_citation
     assert "snippet" in first_citation
-    assert "SAP_MM" in first_citation["document"]
+    assert ("SAP CC" in first_citation["document"] or "pdfdownload" in first_citation["document"])
     # Verify no raw filepath leaks
     assert "C:\\" not in first_citation["document"]
     assert "/Users/" not in first_citation["document"]
 
 def test_rag_web_fallback_for_external_topics(auth_headers):
-    # Query for SAP Ariba cloud procurement (not in our 10 primary on-prem manuals)
+    # Query for SAP Ariba cloud procurement (not in our primary BRIM manuals)
     resp = client.post(
         "/api/rag/query",
         json={"query": "How does SAP Ariba integrate with S/4HANA for supplier sourcing?"},

@@ -11,6 +11,68 @@ class GroundingService:
         return bool(re.search(pattern, text.lower()))
 
     @classmethod
+    def align_citations(
+        cls,
+        answer: str,
+        chunks: List[Dict[str, Any]],
+        min_top_k: int = 1
+    ) -> List[Dict[str, Any]]:
+        """
+        Aligns retrieved evidence chunks with claims and references in the generated answer.
+        Filters out retrieved chunks that were neither referenced nor relevant to the final answer.
+        """
+        if not chunks or not answer:
+            return []
+
+        answer_lower = answer.lower()
+        aligned = []
+
+        for idx, chunk in enumerate(chunks):
+            doc_name = (chunk.get("document_name") or "").lower()
+            section = (chunk.get("section") or "").lower()
+            chunk_text = (chunk.get("chunk_text") or "").lower()
+
+            # Check 1: Explicit citation or document mention in the answer
+            doc_mentioned = bool(doc_name and doc_name in answer_lower)
+            section_mentioned = bool(section and len(section) > 4 and section in answer_lower)
+
+            # Check 2: Content alignment based on distinctive term overlap
+            chunk_tokens = set(re.findall(r"\b[a-z0-9\-_/]{4,}\b", chunk_text))
+            chunk_tokens.difference_update({
+                "this", "that", "with", "from", "have", "more", "also", "into", "than",
+                "been", "each", "were", "when", "some", "such", "only", "other", "about",
+                "which", "there", "their", "these", "those", "would", "could", "should"
+            })
+            overlap_count = sum(1 for token in chunk_tokens if token in answer_lower)
+            overlap_ratio = overlap_count / max(len(chunk_tokens), 1)
+
+            # A chunk is aligned if:
+            # - It is explicitly cited/mentioned, OR
+            # - It has substantial conceptual term overlap (>= 15% of key terms), OR
+            # - It is the primary ranked evidence (idx < min_top_k) with a strong rerank score >= 0.60
+            rerank_score = float(chunk.get("rerank_score", chunk.get("score", 0.0)))
+            is_primary = (idx < min_top_k and rerank_score >= 0.60)
+
+            if doc_mentioned or section_mentioned or overlap_ratio >= 0.15 or is_primary:
+                aligned.append({
+                    "document": chunk.get("document_name", "Unknown SAP Document"),
+                    "page": chunk.get("page_number", 1),
+                    "section": chunk.get("section"),
+                    "score": rerank_score,
+                    "snippet": (chunk.get("chunk_text") or "")[:280] + ("..." if len(chunk.get("chunk_text") or "") > 280 else "")
+                })
+
+        return aligned if aligned else [
+            {
+                "document": chunks[0].get("document_name", "Unknown SAP Document"),
+                "page": chunks[0].get("page_number", 1),
+                "section": chunks[0].get("section"),
+                "score": float(chunks[0].get("rerank_score", chunks[0].get("score", 0.0))),
+                "snippet": (chunks[0].get("chunk_text") or "")[:280] + ("..." if len(chunks[0].get("chunk_text") or "") > 280 else "")
+            }
+        ]
+
+    @classmethod
     def evaluate_grounding(
         cls,
         query: str,

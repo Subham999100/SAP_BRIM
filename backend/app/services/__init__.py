@@ -7,6 +7,7 @@ from backend.app.services.grounding_service import grounding_service
 from backend.app.services.web_search_service import web_search_service
 from backend.app.services.llm_service import llm_service
 from backend.app.services.rag_service import rag_service
+from backend.app.services.context_builder import context_builder
 
 __all__ = [
     "sap_classifier",
@@ -18,4 +19,5 @@ __all__ = [
     "web_search_service",
     "llm_service",
     "rag_service",
+    "context_builder",
 ]
